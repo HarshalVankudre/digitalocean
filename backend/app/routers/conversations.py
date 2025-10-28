@@ -4,8 +4,17 @@ from bson import ObjectId
 from ..deps import db_dep, user_dep
 from ..schemas import ConversationCreate, ConversationPublic, ConversationDetail, MessageCreate, MessagePublic
 from ..services.do_agent import call_do_agent
+from fastapi import APIRouter, HTTPException
+from fastapi.responses import StreamingResponse
+from datetime import datetime
+from bson import ObjectId
+import httpx
+import json
+import anyio
+from ..deps import db_dep, user_dep
+from ..schemas import MessageCreate
 
-router = APIRouter(prefix="/conversations", tags=["conversations"]) 
+router = APIRouter(prefix="/conversations", tags=["conversations"])
 
 @router.post("/", response_model=ConversationPublic)
 async def create_conversation(body: ConversationCreate, db = db_dep, user = user_dep):
@@ -145,3 +154,91 @@ async def delete_conversation(cid: str, db = db_dep, user = user_dep):
     await db.messages.delete_many({ "conversation_id": conv["_id"] })
     await db.conversations.delete_one({ "_id": conv["_id"] })
     return {"ok": True}
+
+
+@router.post("/{cid}/stream")
+async def send_streaming_message(cid: str, msg: MessageCreate, db = db_dep, user = user_dep):
+    conv = await db.conversations.find_one({"_id": ObjectId(cid), "user_id": ObjectId(user["id"])})
+    if not conv:
+        raise HTTPException(status_code=404, detail="Conversation not found")
+
+    # Persist the user message first
+    user_doc = {
+        "conversation_id": conv["_id"],
+        "role": "user",
+        "content": msg.content,
+        "created_at": datetime.utcnow(),
+    }
+    await db.messages.insert_one(user_doc)
+
+    # Read app settings (agent endpoint & key)
+    settings = await db.app_settings.find_one({"_id": "singleton"}) or {}
+    base_url = (settings.get("do_agent_base_url") or "").rstrip("/")
+    access_key = settings.get("do_agent_access_key") or ""
+    if not base_url or not access_key:
+        raise HTTPException(status_code=400, detail="Agent settings missing")
+
+    # Prepare DigitalOcean Agent payload
+    payload = {
+        "messages": [
+            {"role": "user", "content": msg.content}
+        ],
+        "stream": True,
+        "include_retrieval_info": bool(settings.get("include_retrieval_info", False)),
+        "include_functions_info": bool(settings.get("include_functions_info", False)),
+        "include_guardrails_info": bool(settings.get("include_guardrails_info", False)),
+    }
+
+    async def do_stream():
+        # Keep an accumulator to save the final assistant message
+        assistant_accum = []
+        async with httpx.AsyncClient(timeout=None) as client:
+            url = f"{base_url}/api/v1/chat/completions"
+            headers = {
+                "Authorization": f"Bearer {access_key}",
+                "Content-Type": "application/json",
+            }
+            async with client.stream("POST", url, headers=headers, json=payload) as r:
+                r.raise_for_status()
+                async for chunk in r.aiter_bytes():
+                    if not chunk:
+                        continue
+                    text = chunk.decode("utf-8", errors="ignore")
+                    # Forward as Server-Sent Events style (works with fetch reader above)
+                    # If provider already returns SSE lines, we just forward them line-by-line.
+                    for line in text.splitlines():
+                        line = line.strip()
+                        if not line:
+                            continue
+                        # Try to extract plain text deltas if response is JSON chunks
+                        # Fallback: forward raw
+                        try:
+                            obj = json.loads(line)
+                            # Adapt to your agent’s stream shape; here we try OpenAI-like chunks:
+                            delta = obj.get("choices", [{}])[0].get("delta", {}).get("content")
+                            if delta:
+                                assistant_accum.append(delta)
+                                yield f"data: {delta}\n\n"
+                            # If agent sends a "[DONE]" marker:
+                            if obj.get("done"):
+                                yield "data: [DONE]\n\n"
+                        except Exception:
+                            assistant_accum.append(line)
+                            yield f"data: {line}\n\n"
+
+        # Save the assistant message after the stream ends
+        full_text = "".join(assistant_accum).strip()
+        if full_text:
+            await db.messages.insert_one({
+                "conversation_id": conv["_id"],
+                "role": "assistant",
+                "content": full_text,
+                "created_at": datetime.utcnow(),
+            })
+            await db.conversations.update_one(
+                {"_id": conv["_id"]},
+                {"$set": {"updated_at": datetime.utcnow(), "title": conv.get("title") or full_text[:60]}}
+            )
+
+    # Return a streaming response
+    return StreamingResponse(do_stream(), media_type="text/event-stream")
