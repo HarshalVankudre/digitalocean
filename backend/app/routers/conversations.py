@@ -132,8 +132,9 @@ async def send_streaming_message(cid: str, msg: MessageCreate, db=db_dep, user=u
                                     if "content" in delta:
                                         delta_content = delta.get("content")
 
-                            if delta_content:
+                            if delta_content is not None:  # Allow empty strings
                                 assistant_accum.append(delta_content)
+                                # Send just the content, not wrapped in "data: "
                                 yield f"data: {delta_content}\n\n"
 
                         except json.JSONDecodeError:

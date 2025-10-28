@@ -1,10 +1,10 @@
-import { useEffect, useState } from "react";
+import { useEffect, useState, useMemo } from "react";
 import ConversationList from "../components/ConversationList";
 import ChatMessage from "../components/ChatMessage";
 import { api } from "../lib/api";
 
 /** Types kept lightweight to match existing backend shapes */
-type Msg = { id?: string; role: "user" | "assistant"; content: string };
+type Msg = { id?: string; role: "user" | "assistant"; content: string; isStreaming?: boolean };
 type Conv = { id: string; title?: string };
 
 // FIXED: Changed VITE_API_BASE_URL to VITE_API_BASE to match api.ts
@@ -15,6 +15,8 @@ export default function Chat() {
   const [messages, setMessages] = useState<Msg[]>([]);
   const [input, setInput] = useState("");
   const [busy, setBusy] = useState(false);
+  const [streamingContent, setStreamingContent] = useState("");
+  const [streamingTimer, setStreamingTimer] = useState<NodeJS.Timeout | null>(null);
 
   // ---------- Init: reopen last, else most recent, else create ----------
   useEffect(() => {
@@ -67,12 +69,12 @@ export default function Chat() {
   // ---------- Streaming helpers ----------
   const appendAssistant = (delta: string) => {
     setMessages((m) => {
-      if (m.length && m[m.length - 1].role === "assistant") {
+      if (m.length && m[m.length - 1].role === "assistant" && m[m.length - 1].isStreaming) {
         const last = m[m.length - 1];
-        const updated = { ...last, content: (last.content || "") + delta };
+        const updated = { ...last, content: last.content + delta };
         return [...m.slice(0, -1), updated];
       }
-      return [...m, { id: "local-a-" + Date.now(), role: "assistant", content: delta }];
+      return [...m, { id: "local-a-" + Date.now(), role: "assistant", content: delta, isStreaming: true }];
     });
   };
 
@@ -101,13 +103,11 @@ export default function Chat() {
 
       if (!resp.ok || !resp.body) {
         console.warn("Stream endpoint failed, falling back to non-streaming");
-        // Fallback: non-stream route (will 404 since we removed it, but good for debugging)
         try {
           const r = await api.post<Msg>(`/conversations/${cid}/messages`, { content: text });
           setMessages((m) => [...m, r.data]);
         } catch (fallbackErr) {
           console.error("Fallback also failed:", fallbackErr);
-          // Remove the optimistic message on total failure
           setMessages((m) => m.filter((msg) => msg.id !== localUserMsg.id));
         }
         return;
@@ -122,21 +122,32 @@ export default function Chat() {
         done = d;
         if (value) {
           const chunk = decoder.decode(value, { stream: true });
-          // Accept both SSE-style "data: ..." lines and raw chunk text
-          chunk
-            .split("\n")
-            .filter(Boolean)
-            .forEach((line) => {
-              const s = line.startsWith("data:") ? line.slice(5).trim() : line.trim();
-              if (!s) return;
-              if (s === "[DONE]") return;
-              appendAssistant(s);
-            });
+          const lines = chunk.split("\n");
+
+          for (const line of lines) {
+            if (!line.trim()) continue;
+
+            if (line.startsWith("data: ")) {
+              const content = line.slice(6);
+              if (content === "[DONE]") {
+                continue;
+              }
+              appendAssistant(content);
+            }
+          }
         }
       }
+
+      // After streaming completes, mark the message as complete so it renders properly
+      setMessages((m) => {
+        if (m.length && m[m.length - 1].isStreaming) {
+          const last = m[m.length - 1];
+          return [...m.slice(0, -1), { ...last, isStreaming: false }];
+        }
+        return m;
+      });
     } catch (err) {
       console.error("Error during streaming:", err);
-      // Remove the optimistic message on error
       setMessages((m) => m.filter((msg) => msg.id !== localUserMsg.id));
     } finally {
       setBusy(false);
@@ -154,7 +165,12 @@ export default function Chat() {
         <div className="mx-auto flex h-full max-w-3xl flex-col px-4">
           <div className="flex-1 overflow-y-auto py-6">
             {messages.map((m, i) => (
-              <ChatMessage key={m.id ?? i} role={m.role} content={m.content} />
+              <ChatMessage
+                key={m.id ?? i}
+                role={m.role}
+                content={m.content}
+                isStreaming={m.isStreaming}
+              />
             ))}
           </div>
 
