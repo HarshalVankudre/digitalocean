@@ -1,0 +1,61 @@
+# ==================================
+# General / Operating System
+# ==================================
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# ==================================
+# IDEs and Editors
+# ==================================
+.vscode/
+.idea/
+*.sublime-*
+
+# ==================================
+# Environment Files
+# (Contains secrets - NEVER commit!)
+# ==================================
+.env
+.env.local
+.env.*
+!/.env.example # Good practice to commit an example file
+
+# ==================================
+# Backend (Python / venv)
+# ==================================
+# The virtual environment directory
+/backend/.venv/
+# Add other common names if you use them:
+# /backend/.venv/
+/backend/.env/
+
+# Python cache files
+/backend/__pycache__/
+/backend/*.pyc
+/backend/*.pyo
+/backend/*.pyd
+
+# Local database (e.g., dev SQLite)
+/backend/db.sqlite3
+/backend/*.sqlite3
+
+# Coverage/Test reports
+/backend/.coverage
+/backend/.pytest_cache/
+
+# ==================================
+# Frontend (Node.js / npm)
+# ==================================
+# Downloaded dependencies
+/frontend/node_modules/
+
+# Build artifacts (compiled code)
+/frontend/dist/
+/frontend/build/
+/frontend/.output/
+/frontend/.next/  # If using Next.js
+
+# Log files
+npm-debug.log*
+yarn-error.log*
