@@ -88,8 +88,8 @@ export default function Chat() {
     setBusy(true);
 
     try {
-      // Try streaming endpoint first
-      const resp = await fetch(`${API_BASE}/conversations/${cid}/stream`, {
+      // FIXED: Changed from /stream to /messages/stream
+      const resp = await fetch(`${API_BASE}/conversations/${cid}/messages/stream`, {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
@@ -99,6 +99,7 @@ export default function Chat() {
       });
 
       if (!resp.ok || !resp.body) {
+        console.warn("Stream endpoint failed, falling back to non-streaming");
         // Fallback: non-stream route
         const r = await api.post<Msg>(`/conversations/${cid}/messages`, { content: text });
         setMessages((m) => [...m, r.data]);
@@ -126,7 +127,8 @@ export default function Chat() {
             });
         }
       }
-    } catch {
+    } catch (err) {
+      console.error("Error during streaming:", err);
       // If stream fails mid-way, we don't resend to avoid duplicate answers.
     } finally {
       setBusy(false);
