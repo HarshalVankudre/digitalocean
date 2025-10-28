@@ -109,7 +109,7 @@ async def send_streaming_message(cid: str, msg: MessageCreate, db=db_dep, user=u
                     print("--- [do_stream]: Status OK, starting line iteration ---")
                     async for line in r.aiter_lines():
                         line = line.strip()
-                        if not line or not line.startsWith("data:"):
+                        if not line or not line.startswith("data:"):
                             continue
 
                         data_str = line[5:].strip()

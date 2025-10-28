@@ -7,7 +7,8 @@ import { api } from "../lib/api";
 type Msg = { id?: string; role: "user" | "assistant"; content: string };
 type Conv = { id: string; title?: string };
 
-const API_BASE = (import.meta as any).env?.VITE_API_BASE_URL || "";
+// FIXED: Changed VITE_API_BASE_URL to VITE_API_BASE to match api.ts
+const API_BASE = (import.meta.env?.VITE_API_BASE as string | undefined) || "http://localhost:8000";
 
 export default function Chat() {
   const [cid, setCid] = useState<string>("");
@@ -88,7 +89,7 @@ export default function Chat() {
     setBusy(true);
 
     try {
-      // FIXED: Changed from /stream to /messages/stream
+      // Call streaming endpoint
       const resp = await fetch(`${API_BASE}/conversations/${cid}/messages/stream`, {
         method: "POST",
         headers: {
@@ -100,9 +101,15 @@ export default function Chat() {
 
       if (!resp.ok || !resp.body) {
         console.warn("Stream endpoint failed, falling back to non-streaming");
-        // Fallback: non-stream route
-        const r = await api.post<Msg>(`/conversations/${cid}/messages`, { content: text });
-        setMessages((m) => [...m, r.data]);
+        // Fallback: non-stream route (will 404 since we removed it, but good for debugging)
+        try {
+          const r = await api.post<Msg>(`/conversations/${cid}/messages`, { content: text });
+          setMessages((m) => [...m, r.data]);
+        } catch (fallbackErr) {
+          console.error("Fallback also failed:", fallbackErr);
+          // Remove the optimistic message on total failure
+          setMessages((m) => m.filter((msg) => msg.id !== localUserMsg.id));
+        }
         return;
       }
 
@@ -129,7 +136,8 @@ export default function Chat() {
       }
     } catch (err) {
       console.error("Error during streaming:", err);
-      // If stream fails mid-way, we don't resend to avoid duplicate answers.
+      // Remove the optimistic message on error
+      setMessages((m) => m.filter((msg) => msg.id !== localUserMsg.id));
     } finally {
       setBusy(false);
     }
